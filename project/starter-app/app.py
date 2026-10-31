@@ -26,7 +26,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
 )
 DB = "/tmp/notevault.db"
-SECRET = "notevault-dev-secret"  # used to sign session tokens
+SECRET = os.environ.get("SECRET_KEY") or os.urandom(32).hex()
 
 # Anti-copying: every team's build is seeded with a marker derived from their own TEAM_ID, so
 # any evidence a team submits (SQLi dump, IDOR response, admin-panel screenshot) that shows the
@@ -86,7 +86,7 @@ def current_user():
     if not tok:
         return None
     try:
-        data = jwt.decode(tok, SECRET, algorithms=["HS256", "none"])
+        data = jwt.decode(tok, SECRET, algorithms=["HS256"])
         return data.get("sub")
     except Exception:
         return None
