@@ -20,6 +20,11 @@ from flask import Flask, request, jsonify, render_template_string, redirect, mak
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 DB = "/tmp/notevault.db"
 SECRET = "notevault-dev-secret"  # used to sign session tokens
 
@@ -134,8 +139,10 @@ def login():
     if not row or not check_password_hash(row["password"], password or ""):
         return "login failed", 401
     tok = jwt.encode({"sub": username}, SECRET, algorithm="HS256")
+    if isinstance(tok, bytes):
+        tok = tok.decode("utf-8")
     resp = make_response(redirect("/"))
-    resp.set_cookie("session", tok)
+    resp.set_cookie("session", tok, httponly=True, secure=True, samesite="Lax")
     return resp
 
 
