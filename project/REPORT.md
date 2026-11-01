@@ -256,7 +256,7 @@ return "<pre>exporting notes as %s</pre>" % fmt
 ```
 
 - **Why this fixes it:** The export endpoint no longer invokes a shell. Only explicitly allowed format values are accepted, so shell metacharacters such as `;` are rejected as input.
-- **Commit:** `<insert the real commit hash after committing>`
+- **Commit:** `<10cf51609195598363a58bfa4e8e962ff1ead8fe>`
 - **Proof the exploit now fails:** ![F09-export-command-injection-after fix](img/f09-export-command-injection-after.png)
 
 ---
