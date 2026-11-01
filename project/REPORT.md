@@ -121,16 +121,29 @@
 
 ## 5. Remediation  *(25 pts)*
 
-Per finding: the fix, **before/after** code, and the commit that implements it.
 
-### Fix for F-01
-```diff
-- vulnerable line
-+ fixed line
+### Fix for F-05 — SQL Injection in Login
+
+**Before**
+
+```python
+q = "SELECT * FROM users WHERE username = '%s' AND password = '%s'" % (
+    username, hashlib.md5((password or "").encode()).hexdigest())
+row = con.execute(q).fetchone()
 ```
-- **Why this fixes it:** …
-- **Commit:** `<hash>`
-- **Proof the exploit now fails:** (screenshot)
+
+**After**
+
+```python
+row = con.execute(
+    "SELECT * FROM users WHERE username = ? AND password = ?",
+    (username, hashlib.md5((password or "").encode()).hexdigest()),
+).fetchone()
+```
+
+- **Why this fixes it:** The username and password hash are bound as SQL parameter values, so SQL metacharacters in the username cannot change the query structure.
+- **Commit:** 
+- **Proof the exploit now fails:** ![F-05 login SQL injection after fix](img/f05-login-sqli-after.png)
 
 ---
 
