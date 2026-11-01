@@ -165,8 +165,41 @@ rows = con.execute(
 ```
 
 - **Why this fixes it:** The authenticated username and search term are bound as SQL values, so SQL syntax in the `q` parameter cannot alter the owner filter or query structure.
-- **Commit:** 
+- **Commit:** `<2beadf5aee0ba4645d1b2022e4db6db37009c6f4>`
 - **Proof the exploit now fails:** ![F-06 search SQL injection after fix](img/f06-search-sqli-after.png)
+
+### Fix for F-07 — Stored XSS in Notes and Search
+
+**Before**
+
+```python
+notes_html = "".join(
+    "<li>#%d <b>%s</b>: %s</li>" % (r["id"], r["title"], r["body"])
+    for r in rows)
+return render_template_string(PAGE, ..., notes_html=notes_html)
+```
+
+```html
+{{ notes_html|safe }}
+```
+
+**After**
+
+```python
+return render_template_string(PAGE, ..., notes=notes)
+```
+
+```html
+{% for note in notes %}
+  <li>#{{ note.id }} <b>{{ note.title }}</b>: {{ note.body }}</li>
+{% endfor %}
+```
+
+The Search endpoint uses the same Jinja loop instead of concatenating database values into an HTML string.
+
+- **Why this fixes it:** Note fields are passed as template values and Jinja auto-escapes HTML metacharacters, so stored scripts render as text instead of executing.
+- **Commit:** 
+- **Proof the exploit now fails:** ![F-07 XSS after fix](img/f07-xss-after.png).
 
 ---
 
