@@ -142,8 +142,31 @@ row = con.execute(
 ```
 
 - **Why this fixes it:** The username and password hash are bound as SQL parameter values, so SQL metacharacters in the username cannot change the query structure.
-- **Commit:** 
+- **Commit:** `<6501c42007129136a14c67306de8e05abe7cfd83>`
 - **Proof the exploit now fails:** ![F-05 login SQL injection after fix](img/f05-login-sqli-after.png)
+
+### Fix for F-06 — SQL Injection in Search
+
+**Before**
+
+```python
+q = "SELECT id,title,body FROM notes WHERE owner='%s' AND body LIKE '%%%s%%'" % (user, term)
+rows = con.execute(q).fetchall()
+```
+
+**After**
+
+```python
+rows = con.execute(
+    "SELECT id, title, body FROM notes "
+    "WHERE owner = ? AND body LIKE ?",
+    (user, f"%{term}%"),
+).fetchall()
+```
+
+- **Why this fixes it:** The authenticated username and search term are bound as SQL values, so SQL syntax in the `q` parameter cannot alter the owner filter or query structure.
+- **Commit:** 
+- **Proof the exploit now fails:** ![F-06 search SQL injection after fix](img/f06-search-sqli-after.png)
 
 ---
 
