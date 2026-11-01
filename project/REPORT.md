@@ -198,8 +198,38 @@ return render_template_string(PAGE, ..., notes=notes)
 The Search endpoint uses the same Jinja loop instead of concatenating database values into an HTML string.
 
 - **Why this fixes it:** Note fields are passed as template values and Jinja auto-escapes HTML metacharacters, so stored scripts render as text instead of executing.
-- **Commit:** 
+- **Commit:** `<170218699ce493b6a899626a67d2d897d3f885c7>`
 - **Proof the exploit now fails:** ![F-07 XSS after fix](img/f07-xss-after.png).
+
+### Fix for F-08 — IDOR in Note API
+
+**Before**
+
+```python
+if not current_user():
+    return jsonify(error="auth required"), 401
+r = con.execute(
+    "SELECT id,owner,title,body FROM notes WHERE id = ?",
+    (nid,),
+).fetchone()
+```
+
+**After**
+
+```python
+user = current_user()
+if not user:
+    return jsonify(error="auth required"), 401
+r = con.execute(
+    "SELECT id, owner, title, body FROM notes "
+    "WHERE id = ? AND owner = ?",
+    (nid, user),
+).fetchone()
+```
+
+- **Why this fixes it:** The query now returns a note only when both the requested ID and authenticated owner match, preventing a user from reading another user's note by changing the ID.
+- **Commit:** 
+- **Proof the exploit now fails:** ![F-08 IDOR after fix](img/f08-idor-after.png)
 
 ---
 
