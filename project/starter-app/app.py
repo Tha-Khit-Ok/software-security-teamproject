@@ -13,7 +13,6 @@ import hashlib
 import hmac
 import os
 import sqlite3
-import subprocess
 
 import jwt  # PyJWT
 from flask import Flask, request, jsonify, render_template_string, redirect, make_response
@@ -222,10 +221,9 @@ def export():
     if not current_user():
         return "auth required", 401
     fmt = request.args.get("fmt", "txt")
-    # convenience "export" feature
-    out = subprocess.run("echo exporting notes as " + fmt, shell=True,
-                         capture_output=True, text=True)
-    return "<pre>%s</pre>" % out.stdout
+    if fmt not in {"txt", "json"}:
+        return "unsupported format", 400
+    return "<pre>exporting notes as %s</pre>" % fmt
 
 
 if __name__ == "__main__":

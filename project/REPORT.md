@@ -228,8 +228,36 @@ r = con.execute(
 ```
 
 - **Why this fixes it:** The query now returns a note only when both the requested ID and authenticated owner match, preventing a user from reading another user's note by changing the ID.
-- **Commit:** 
+- **Commit:** `<10cf51609195598363a58bfa4e8e962ff1ead8fe>`
 - **Proof the exploit now fails:** ![F-08 IDOR after fix](img/f08-idor-after.png)
+
+### Fix for F-09 — OS Command Injection in Export
+
+**Before**
+
+```python
+fmt = request.args.get("fmt", "txt")
+out = subprocess.run(
+    "echo exporting notes as " + fmt,
+    shell=True,
+    capture_output=True,
+    text=True,
+)
+return "<pre>%s</pre>" % out.stdout
+```
+
+**After**
+
+```python
+fmt = request.args.get("fmt", "txt")
+if fmt not in {"txt", "json"}:
+    return "unsupported format", 400
+return "<pre>exporting notes as %s</pre>" % fmt
+```
+
+- **Why this fixes it:** The export endpoint no longer invokes a shell. Only explicitly allowed format values are accepted, so shell metacharacters such as `;` are rejected as input.
+- **Commit:** `<insert the real commit hash after committing>`
+- **Proof the exploit now fails:** ![F09-export-command-injection-after fix](img/f09-export-command-injection-after.png)
 
 ---
 
