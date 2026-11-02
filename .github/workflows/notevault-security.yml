@@ -1,0 +1,77 @@
+name: notevault-security
+
+# Team Tha-Khit-Ok security gate for the NoteVault term project (project/starter-app).
+# Runs SAST (Semgrep), SCA (pip-audit + Trivy) and secret scanning (Gitleaks), and
+# fails the build on high-severity findings.
+#
+# The course repo's .semgrepignore and .gitleaks.toml deliberately skip
+# project/starter-app, so the scanners here run on a copy of the app outside the
+# checkout, where those ignore files do not apply.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_DIR: project/starter-app
+  SCAN_DIR: ${{ github.workspace }}/../notevault-scan
+
+jobs:
+  sast-semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install semgrep==1.182.0
+      - name: Copy app outside the repo ignore files
+        run: mkdir -p "$SCAN_DIR" && cp -R "$APP_DIR"/. "$SCAN_DIR"/
+      - name: Semgrep (fail on ERROR severity)
+        working-directory: ${{ env.SCAN_DIR }}
+        run: |
+          semgrep scan --config p/python --config p/flask --metrics=off .
+          semgrep scan --config p/python --config p/flask --metrics=off \
+            --severity ERROR --error --quiet .
+
+  sca-pip-audit:
+    name: SCA (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit==2.10.1
+      - name: pip-audit (fail on any known vulnerability)
+        run: pip-audit -r "$APP_DIR/requirements.txt" --no-deps --disable-pip
+
+  sca-trivy-image:
+    name: SCA (Trivy image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build image
+        run: docker build -t notevault:ci "$APP_DIR"
+      - name: Trivy (fail on fixable HIGH/CRITICAL)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.76.1 image --scanners vuln \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notevault:ci
+
+  secrets-gitleaks:
+    name: Secret scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Copy app outside the repo ignore files
+        run: mkdir -p "$SCAN_DIR" && cp -R "$APP_DIR"/. "$SCAN_DIR"/
+      - name: Gitleaks (fail on any secret)
+        run: |
+          docker run --rm -v "$SCAN_DIR":/scan \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 dir /scan --no-banner -v
