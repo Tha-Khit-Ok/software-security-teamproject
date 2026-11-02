@@ -13,14 +13,19 @@ import hashlib
 import hmac
 import os
 import sqlite3
-import subprocess
 
 import jwt  # PyJWT
 from flask import Flask, request, jsonify, render_template_string, redirect, make_response
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 DB = "/tmp/notevault.db"
-SECRET = "notevault-dev-secret"  # used to sign session tokens
+SECRET = os.environ.get("SECRET_KEY") or os.urandom(32).hex()
 
 # Anti-copying: every team's build is seeded with a marker derived from their own TEAM_ID, so
 # any evidence a team submits (SQLi dump, IDOR response, admin-panel screenshot) that shows the
@@ -40,7 +45,12 @@ PAGE = """
   {% if is_admin %}· <a href="/admin">admin</a>{% endif %}</p>
 <form method=post action="/notes"><input name=title placeholder=title>
   <input name=body placeholder=note><button>Add note</button></form>
-<h3>Your notes</h3>{{ notes_html|safe }}
+<h3>Your notes</h3>
+<ul>
+{% for note in notes %}
+  <li>#{{ note.id }} <b>{{ note.title }}</b>: {{ note.body }}</li>
+{% endfor %}
+</ul>
 <form action="/search"><input name=q placeholder="search notes"><button>Search</button></form>
 {% else %}
 <form method=post action="/login">user <input name=username> pass <input name=password type=password>
@@ -65,8 +75,8 @@ def seed():
         "CREATE TABLE notes (id INTEGER PRIMARY KEY, owner TEXT, title TEXT, body TEXT);"
     )
     con.executemany("INSERT INTO users (username, password, role) VALUES (?,?,?)",
-                    [("alice", hashlib.md5(b"alicepw").hexdigest(), "user"),
-                     ("admin", hashlib.md5(b"admin123").hexdigest(), "admin")])
+                    [("alice", generate_password_hash("alicepw"), "user"),
+                     ("admin", generate_password_hash("admin123"), "admin")])
     con.executemany("INSERT INTO notes (owner, title, body) VALUES (?,?,?)",
                     [("alice", "groceries", "milk, eggs"),
                      ("admin", "infra", "prod db password is hunter2"),
@@ -80,7 +90,7 @@ def current_user():
     if not tok:
         return None
     try:
-        data = jwt.decode(tok, SECRET, algorithms=["HS256", "none"])
+        data = jwt.decode(tok, SECRET, algorithms=["HS256"])
         return data.get("sub")
     except Exception:
         return None
@@ -96,25 +106,27 @@ def role_of(username):
 @app.route("/")
 def home():
     user = current_user()
-    notes_html = ""
+    notes = []
     if user:
         con = db()
-        rows = con.execute("SELECT id,title,body FROM notes WHERE owner = ?", (user,)).fetchall()
+        notes = con.execute(
+            "SELECT id, title, body FROM notes WHERE owner = ?",
+            (user,),
+        ).fetchall()
         con.close()
-        notes_html = "".join(
-            "<li>#%d <b>%s</b>: %s</li>" % (r["id"], r["title"], r["body"]) for r in rows)
     return render_template_string(PAGE, user=user, is_admin=(user and role_of(user) == "admin"),
-                                  notes_html=notes_html)
+                                  notes=notes)
 
 
 @app.route("/register", methods=["POST"])
 def register():
-    username = request.form.get("username") or (request.json or {}).get("username")
-    password = request.form.get("password") or (request.json or {}).get("password")
-    role = request.form.get("role") or (request.json or {}).get("role") or "user"
+    req_json = request.get_json(silent=True) or {}
+    username = request.form.get("username") or req_json.get("username")
+    password = request.form.get("password") or req_json.get("password")
+    role = "user"
     con = db()
     con.execute("INSERT INTO users (username, password, role) VALUES (?,?,?)",
-                (username, hashlib.md5(password.encode()).hexdigest(), role))
+                (username, generate_password_hash(password), role))
     con.commit()
     con.close()
     return redirect("/")
@@ -122,18 +134,22 @@ def register():
 
 @app.route("/login", methods=["POST"])
 def login():
-    username = request.form.get("username") or (request.json or {}).get("username")
-    password = request.form.get("password") or (request.json or {}).get("password")
+    req_json = request.get_json(silent=True) or {}
+    username = request.form.get("username") or req_json.get("username")
+    password = request.form.get("password") or req_json.get("password")
     con = db()
-    q = "SELECT * FROM users WHERE username = '%s' AND password = '%s'" % (
-        username, hashlib.md5((password or "").encode()).hexdigest())
-    row = con.execute(q).fetchone()
+    row = con.execute(
+        "SELECT * FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
     con.close()
-    if not row:
+    if not row or not check_password_hash(row["password"], password or ""):
         return "login failed", 401
     tok = jwt.encode({"sub": username}, SECRET, algorithm="HS256")
+    if isinstance(tok, bytes):
+        tok = tok.decode("utf-8")
     resp = make_response(redirect("/"))
-    resp.set_cookie("session", tok)
+    resp.set_cookie("session", tok, httponly=True, secure=True, samesite="Lax")
     return resp
 
 
@@ -160,10 +176,15 @@ def add_note():
 
 @app.route("/api/notes/<int:nid>")
 def api_note(nid):
-    if not current_user():
+    user = current_user()
+    if not user:
         return jsonify(error="auth required"), 401
     con = db()
-    r = con.execute("SELECT id,owner,title,body FROM notes WHERE id = ?", (nid,)).fetchone()
+    r = con.execute(
+        "SELECT id, owner, title, body FROM notes "
+        "WHERE id = ? AND owner = ?",
+        (nid, user),
+    ).fetchone()
     con.close()
     return (jsonify(dict(r)) if r else (jsonify(error="not found"), 404))
 
@@ -175,11 +196,23 @@ def search():
         return "auth required", 401
     term = request.args.get("q", "")
     con = db()
-    q = "SELECT id,title,body FROM notes WHERE owner='%s' AND body LIKE '%%%s%%'" % (user, term)
-    rows = con.execute(q).fetchall()
+    rows = con.execute(
+        "SELECT id, title, body FROM notes "
+        "WHERE owner = ? AND body LIKE ?",
+        (user, f"%{term}%"),
+    ).fetchall()
     con.close()
-    return render_template_string("<a href=/>back</a><ul>" +
-        "".join("<li>%s: %s</li>" % (r["title"], r["body"]) for r in rows) + "</ul>")
+    return render_template_string(
+        """
+        <a href="/">back</a>
+        <ul>
+        {% for note in notes %}
+          <li>{{ note.title }}: {{ note.body }}</li>
+        {% endfor %}
+        </ul>
+        """,
+        notes=rows,
+    )
 
 
 @app.route("/admin")
@@ -198,12 +231,11 @@ def export():
     if not current_user():
         return "auth required", 401
     fmt = request.args.get("fmt", "txt")
-    # convenience "export" feature
-    out = subprocess.run("echo exporting notes as " + fmt, shell=True,
-                         capture_output=True, text=True)
-    return "<pre>%s</pre>" % out.stdout
+    if fmt not in {"txt", "json"}:
+        return "unsupported format", 400
+    return "<pre>exporting notes as %s</pre>" % fmt
 
 
 if __name__ == "__main__":
     seed()
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    app.run(host="0.0.0.0", port=8080, debug=False)

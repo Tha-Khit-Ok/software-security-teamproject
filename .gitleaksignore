@@ -1,0 +1,7 @@
+# Gitleaks findings triaged by team Tha-Khit-Ok and accepted as not sensitive.
+# Each line ignores one finding only (commit:file:rule:line); everything else is still scanned.
+#
+# Forged admin JWT used as the F-04 reproduction step in an earlier report draft.
+# It was signed with the old hard-coded key "notevault-dev-secret", which F-04 removed;
+# the app now rejects it (HTTP 403 on /admin). The report file was later deleted.
+e77626f03e014bda6ec5e9581b59c65b97d8d27c:project/REPORT.md:jwt:102
