@@ -13,7 +13,6 @@ import hashlib
 import hmac
 import os
 import sqlite3
-import subprocess
 
 import jwt  # PyJWT
 from flask import Flask, request, jsonify, render_template_string, redirect, make_response
@@ -46,7 +45,12 @@ PAGE = """
   {% if is_admin %}· <a href="/admin">admin</a>{% endif %}</p>
 <form method=post action="/notes"><input name=title placeholder=title>
   <input name=body placeholder=note><button>Add note</button></form>
-<h3>Your notes</h3>{{ notes_html|safe }}
+<h3>Your notes</h3>
+<ul>
+{% for note in notes %}
+  <li>#{{ note.id }} <b>{{ note.title }}</b>: {{ note.body }}</li>
+{% endfor %}
+</ul>
 <form action="/search"><input name=q placeholder="search notes"><button>Search</button></form>
 {% else %}
 <form method=post action="/login">user <input name=username> pass <input name=password type=password>
@@ -102,15 +106,16 @@ def role_of(username):
 @app.route("/")
 def home():
     user = current_user()
-    notes_html = ""
+    notes = []
     if user:
         con = db()
-        rows = con.execute("SELECT id,title,body FROM notes WHERE owner = ?", (user,)).fetchall()
+        notes = con.execute(
+            "SELECT id, title, body FROM notes WHERE owner = ?",
+            (user,),
+        ).fetchall()
         con.close()
-        notes_html = "".join(
-            "<li>#%d <b>%s</b>: %s</li>" % (r["id"], r["title"], r["body"]) for r in rows)
     return render_template_string(PAGE, user=user, is_admin=(user and role_of(user) == "admin"),
-                                  notes_html=notes_html)
+                                  notes=notes)
 
 
 @app.route("/register", methods=["POST"])
@@ -133,8 +138,10 @@ def login():
     username = request.form.get("username") or req_json.get("username")
     password = request.form.get("password") or req_json.get("password")
     con = db()
-    q = "SELECT * FROM users WHERE username = '%s'" % username
-    row = con.execute(q).fetchone()
+    row = con.execute(
+        "SELECT * FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
     con.close()
     if not row or not check_password_hash(row["password"], password or ""):
         return "login failed", 401
@@ -169,10 +176,15 @@ def add_note():
 
 @app.route("/api/notes/<int:nid>")
 def api_note(nid):
-    if not current_user():
+    user = current_user()
+    if not user:
         return jsonify(error="auth required"), 401
     con = db()
-    r = con.execute("SELECT id,owner,title,body FROM notes WHERE id = ?", (nid,)).fetchone()
+    r = con.execute(
+        "SELECT id, owner, title, body FROM notes "
+        "WHERE id = ? AND owner = ?",
+        (nid, user),
+    ).fetchone()
     con.close()
     return (jsonify(dict(r)) if r else (jsonify(error="not found"), 404))
 
@@ -184,11 +196,23 @@ def search():
         return "auth required", 401
     term = request.args.get("q", "")
     con = db()
-    q = "SELECT id,title,body FROM notes WHERE owner='%s' AND body LIKE '%%%s%%'" % (user, term)
-    rows = con.execute(q).fetchall()
+    rows = con.execute(
+        "SELECT id, title, body FROM notes "
+        "WHERE owner = ? AND body LIKE ?",
+        (user, f"%{term}%"),
+    ).fetchall()
     con.close()
-    return render_template_string("<a href=/>back</a><ul>" +
-        "".join("<li>%s: %s</li>" % (r["title"], r["body"]) for r in rows) + "</ul>")
+    return render_template_string(
+        """
+        <a href="/">back</a>
+        <ul>
+        {% for note in notes %}
+          <li>{{ note.title }}: {{ note.body }}</li>
+        {% endfor %}
+        </ul>
+        """,
+        notes=rows,
+    )
 
 
 @app.route("/admin")
@@ -207,10 +231,9 @@ def export():
     if not current_user():
         return "auth required", 401
     fmt = request.args.get("fmt", "txt")
-    # convenience "export" feature
-    out = subprocess.run("echo exporting notes as " + fmt, shell=True,
-                         capture_output=True, text=True)
-    return "<pre>%s</pre>" % out.stdout
+    if fmt not in {"txt", "json"}:
+        return "unsupported format", 400
+    return "<pre>exporting notes as %s</pre>" % fmt
 
 
 if __name__ == "__main__":
